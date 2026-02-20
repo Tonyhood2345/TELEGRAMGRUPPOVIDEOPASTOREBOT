@@ -67,4 +67,33 @@ def main():
     videos = video_results.get('files', [])
 
     if not videos:
-        print(f"❌ ERRORE: Nessun video trovato con nome '{nome_file_cercato}' nella cartella {sett
+        print(f"❌ ERRORE: Nessun video trovato con nome '{nome_file_cercato}' nella cartella {settimana_anno}")
+        return
+
+    video = videos[0]
+    print(f"🎬 Video trovato: {video['name']} (ID: {video['id']})")
+
+    # 3. DOWNLOAD E INVIO
+    print("Scaricamento video...")
+    request = service.files().get_media(fileId=video['id'])
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    
+    fh.seek(0)
+    
+    print("Invio a Telegram...")
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVideo"
+    files = {'video': (video['name'], fh, 'video/mp4')}
+    data = {'chat_id': CHAT_ID, 'caption': f"🎥 Video: {nome_file_cercato}"}
+    
+    r = requests.post(url, files=files, data=data)
+    if r.status_code == 200:
+        print("🚀 VIDEO INVIATO CON SUCCESSO!")
+    else:
+        print(f"🔴 Errore Telegram: {r.text}")
+
+if __name__ == "__main__":
+    main()
