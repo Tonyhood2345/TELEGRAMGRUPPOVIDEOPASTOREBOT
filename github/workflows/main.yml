@@ -1,0 +1,29 @@
+name: Post Video a Telegram
+
+on:
+  schedule:
+    # Orari UTC (10:30 e 19:30 IT corrispondono a 09:30 e 18:30 UTC circa)
+    - cron: '30 9 * * *'
+    - cron: '30 18 * * *'
+  workflow_dispatch: # Permette di avviarlo a mano per test
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout codice
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib requests
+
+      - name: Esegui Bot
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GDRIVE_JSON }}
+        run: python bot.py
