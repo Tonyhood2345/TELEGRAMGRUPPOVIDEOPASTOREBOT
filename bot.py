@@ -10,7 +10,6 @@ import io
 # --- CONFIGURAZIONE ---
 TELEGRAM_TOKEN = "8083806105:AAGQTsM8kmogmc4UMkMODnsT_5HK-viO7n4"
 CHAT_ID = "-1003619559876"
-# Questa è la cartella "PastoreAI_2026_Archivio"
 FOLDER_ID_ROOT = "1u7VGIK8OPFcuNOBhEtTG1UHCoFlwyVhA"
 
 def get_drive_service():
@@ -19,7 +18,7 @@ def get_drive_service():
         creds = service_account.Credentials.from_service_account_info(info)
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
-        print(f"Errore caricamento credenziali: {e}")
+        print(f"Errore credenziali: {e}")
         return None
 
 def main():
@@ -27,7 +26,7 @@ def main():
     if not service: return
 
     now = datetime.datetime.now()
-    settimana_anno = now.strftime("%V") # Es: "08"
+    settimana_anno = now.strftime("%V") 
     giorno_settimana = now.strftime("%A").upper()
     fascia = "MATTINA" if now.hour < 15 else "POMERIGGIO"
     
@@ -39,42 +38,37 @@ def main():
     nome_giorno = giorni_it.get(giorno_settimana, "LUNEDI")
     nome_file_cercato = f"{nome_giorno}_{fascia}"
     
-    print(f"--- AVVIO RICERCA ---")
-    print(f"Settimana: {settimana_anno} | Giorno: {nome_giorno} | Fascia: {fascia}")
+    print(f"Cerco Settimana: {settimana_anno} | File: {nome_file_cercato}")
 
-    # 1. CERCA LA CARTELLA DELLA SETTIMANA (Ricerca broad)
+    # 1. CERCA CARTELLA SETTIMANA
     query_folder = f"'{FOLDER_ID_ROOT}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     results = service.files().list(q=query_folder).execute()
     folders = results.get('files', [])
 
     week_folder_id = None
     for f in folders:
-        # Se il nome della cartella contiene "08", la prendiamo
         if settimana_anno in f['name']:
             week_folder_id = f['id']
-            print(f"✅ Cartella settimana trovata: {f['name']} (ID: {week_folder_id})")
+            print(f"Cartella trovata: {f['name']}")
             break
 
     if not week_folder_id:
-        print(f"❌ ERRORE: Nessuna cartella trovata che contiene '{settimana_anno}' dentro PastoreAI_2026_Archivio")
-        print(f"Cartelle trovate in root: {[f['name'] for f in folders]}")
+        print(f"Errore: Cartella {settimana_anno} non trovata.")
         return
 
-    # 2. CERCA IL VIDEO
-    # Cerchiamo un file che contenga il nome (es: "VENERDI_MATTINA")
+    # 2. CERCA VIDEO
     query_video = f"'{week_folder_id}' in parents and name contains '{nome_file_cercato}' and trashed = false"
     video_results = service.files().list(q=query_video).execute()
     videos = video_results.get('files', [])
 
     if not videos:
-        print(f"❌ ERRORE: Nessun video trovato con nome '{nome_file_cercato}' nella cartella {settimana_anno}")
+        print(f"Errore: Video {nome_file_cercato} non trovato.")
         return
 
     video = videos[0]
-    print(f"🎬 Video trovato: {video['name']} (ID: {video['id']})")
+    print(f"Video trovato: {video['name']}")
 
     # 3. DOWNLOAD E INVIO
-    print("Scaricamento video...")
     request = service.files().get_media(fileId=video['id'])
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
@@ -83,17 +77,15 @@ def main():
         _, done = downloader.next_chunk()
     
     fh.seek(0)
-    
-    print("Invio a Telegram...")
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVideo"
     files = {'video': (video['name'], fh, 'video/mp4')}
-    data = {'chat_id': CHAT_ID, 'caption': f"🎥 Video: {nome_file_cercato}"}
+    data = {'chat_id': CHAT_ID, 'caption': f"Video: {nome_file_cercato}"}
     
     r = requests.post(url, files=files, data=data)
     if r.status_code == 200:
-        print("🚀 VIDEO INVIATO CON SUCCESSO!")
+        print("SUCCESSO: Video inviato!")
     else:
-        print(f"🔴 Errore Telegram: {r.text}")
+        print(f"Errore Telegram: {r.text}")
 
 if __name__ == "__main__":
     main()
