@@ -12,15 +12,17 @@ import io
 TELEGRAM_TOKEN = "8083806105:AAGQTsM8kmogmc4UMkMODnsT_5HK-viO7n4"
 CHAT_ID = "-1003619559876"
 
+# INDIRIZZO DI RICERCA FISSATO: Cartella "PastoreAI_2026_Archivio"
+ROOT_FOLDER_ID = "1u7VGIK8OPFcuNOBhEtTG1UHCoFlwyVhA"
+
 def get_drive_service():
     try:
         info = json.loads(os.environ['GOOGLE_APPLICATION_CREDENTIALS'])
         
         print("\n" + "="*60)
         print("🤖 CIAO! SONO IL BOT DI GITHUB.")
-        print("Se non trovo la cartella, vai su Drive, clicca 'Condividi'")
-        print("sulla cartella e invitami come 'Editor' usando questa email:")
-        print(f"👉  {info['client_email']}  👈")
+        print(f"La mia email è: 👉  {info['client_email']}  👈")
+        print("Assicurati che io sia 'Editor' della cartella principale!")
         print("="*60 + "\n")
         
         creds = service_account.Credentials.from_service_account_info(info)
@@ -53,21 +55,21 @@ def main():
     
     nome_video_cercato = f"{giorno_it.replace('ì','i')}_{'Sera' if fascia == 'Pomeriggio' else 'Mattina'}"
     
-    print(f"🔍 Ricerca -> Settimana: {settimana_anno} | Giorno: {giorno_it} | Fase: {fascia}")
+    print(f"🔍 Ricerca Mirata -> Settimana: {settimana_anno} | Giorno: {giorno_it} | Fase: {fascia}")
 
-    # 1. CERCA LA CARTELLA VIDEO
-    query_folder = f"mimeType = 'application/vnd.google-apps.folder' and (name = '{settimana_anno}' or name = 'Settimana_{settimana_anno}') and trashed = false"
+    # 1. CERCA LA CARTELLA VIDEO SOLO DENTRO L'ARCHIVIO PRINCIPALE
+    query_folder = f"'{ROOT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and (name = '{settimana_anno}' or name = 'Settimana_{settimana_anno}') and trashed = false"
     results = service.files().list(q=query_folder).execute()
     folders = results.get('files', [])
 
     if not folders:
-        print(f"❌ ERRORE: Nessuna cartella trovata per la settimana {settimana_anno}.")
+        print(f"❌ ERRORE: Nessuna cartella trovata per la settimana {settimana_anno} all'interno dell'Archivio.")
         return
 
     week_folder_id = folders[0]['id']
-    print(f"✅ Cartella corretta trovata: {folders[0]['name']}")
+    print(f"✅ Cartella settimanale trovata: {folders[0]['name']}")
 
-    # 2. CERCA IL VIDEO
+    # 2. CERCA IL VIDEO SOLO NELLA CARTELLA DELLA SETTIMANA
     query_video = f"'{week_folder_id}' in parents and name contains '{nome_video_cercato}' and trashed = false"
     video_results = service.files().list(q=query_video).execute()
     videos = video_results.get('files', [])
@@ -79,20 +81,18 @@ def main():
     video = videos[0]
     print(f"✅ Video trovato: {video['name']}")
 
-    # 3. CERCA E LEGGI IL PIANO EDITORIALE (RICERCA GLOBALE SU DRIVE)
-    # Cerca il file ovunque in Drive!
-    query_excel = f"name contains 'Piano_Editoriale' and trashed = false"
-    excel_results = service.files().list(q=query_excel, fields="files(id, name, mimeType)", orderBy="modifiedTime desc").execute()
+    # 3. CERCA IL PIANO EDITORIALE SOLO NELLA CARTELLA DELLA SETTIMANA
+    query_excel = f"'{week_folder_id}' in parents and name contains 'Piano_Editoriale' and trashed = false"
+    excel_results = service.files().list(q=query_excel, fields="files(id, name, mimeType)").execute()
     excels = excel_results.get('files', [])
 
     caption_telegram = f"🎬 Ecco il video di {giorno_it} {fascia}!\n\nSia Gloria a Dio!" 
 
     if excels:
         excel_file = excels[0]
-        print(f"✅ Foglio Editoriale trovato su Drive: {excel_file['name']}")
+        print(f"✅ Foglio Editoriale trovato: {excel_file['name']}")
         
         if excel_file['mimeType'] == 'application/vnd.google-apps.spreadsheet':
-            # Esporta come CSV perché è solido e combacia col formato che mi hai inviato
             req_excel = service.files().export_media(fileId=excel_file['id'], mimeType='text/csv')
             is_csv = True
         else:
@@ -107,32 +107,34 @@ def main():
         fh_excel.seek(0)
         
         try:
-            # Se è CSV lo leggiamo con read_csv, altrimenti con read_excel
             if is_csv or excel_file['name'].endswith('.csv'):
                 df = pd.read_csv(fh_excel)
             else:
                 df = pd.read_excel(fh_excel)
             
-            # Troviamo le colonne in modo dinamico
+            # Ricerca Dinamica delle Colonne
             col_sett = next((col for col in df.columns if "settimana" in str(col).lower()), None)
             col_giorno = next((col for col in df.columns if "giorno" in str(col).lower()), None)
             col_fase = next((col for col in df.columns if "fase" in str(col).lower()), None)
             col_desc = next((col for col in df.columns if "descrizione" in str(col).lower()), None)
             col_file = next((col for col in df.columns if "file" in str(col).lower()), None)
             
-            if col_sett and col_giorno and col_fase:
-                # Filtraggio esatto della riga incrociando: Settimana + Giorno + Mattina/Pomeriggio
-                mask_sett = df[col_sett].astype(str).str.strip() == str(int(settimana_anno))
+            if col_giorno and col_fase:
+                # Se c'è la colonna settimana la usa, altrimenti si basa solo su giorno e fase
                 mask_giorno = df[col_giorno].apply(pulisci_testo) == pulisci_testo(giorno_it)
                 mask_fase = df[col_fase].apply(pulisci_testo) == pulisci_testo(fascia)
                 
-                riga = df[mask_sett & mask_giorno & mask_fase]
+                if col_sett:
+                    mask_sett = df[col_sett].astype(str).str.strip() == str(int(settimana_anno))
+                    riga = df[mask_sett & mask_giorno & mask_fase]
+                else:
+                    riga = df[mask_giorno & mask_fase]
                 
                 if not riga.empty:
                     descrizione = str(riga.iloc[0][col_desc]).strip() if col_desc else ""
                     testo_file = str(riga.iloc[0][col_file]).strip() if col_file else ""
                     
-                    # INTELLIGENZA ARTIFICIALE: Corregge il tuo errore di incollaggio sulle colonne sfalsate!
+                    # Fix automatico se le colonne sono invertite/sfalsate
                     if ("http" in descrizione or descrizione == "" or descrizione == "nan") and testo_file != "nan" and len(testo_file) > 10:
                         descrizione = testo_file
 
@@ -141,18 +143,18 @@ def main():
                         
                         if len(caption_telegram) > 1024:
                             caption_telegram = caption_telegram[:1000] + "...\n#amen"
-                        print("✅ Didascalia estratta perfettamente dal Foglio Generale (con fix automatico degli errori nelle colonne)!")
+                        print("✅ Didascalia estratta perfettamente dal Foglio locale!")
                     else:
                         print("⚠️ Didascalia vuota nella riga del foglio.")
                 else:
-                    print(f"⚠️ Riga Settimana:{int(settimana_anno)} Giorno:{giorno_it} Fase:{fascia} NON TROVATA nel foglio.")
+                    print(f"⚠️ Riga Giorno:{giorno_it} Fase:{fascia} NON TROVATA nel foglio.")
             else:
                  print(f"⚠️ Impossibile trovare le colonne nel foglio. Colonne presenti: {list(df.columns)}")
 
         except Exception as e:
             print(f"⚠️ Errore lettura Foglio: {e}")
     else:
-        print("⚠️ Nessun file 'Piano_Editoriale' trovato in tutto Google Drive. Uso didascalia base.")
+        print("⚠️ Nessun file 'Piano_Editoriale' trovato nella cartella. Uso didascalia base.")
 
     # 4. DOWNLOAD VIDEO E INVIO A TELEGRAM
     request = service.files().get_media(fileId=video['id'])
