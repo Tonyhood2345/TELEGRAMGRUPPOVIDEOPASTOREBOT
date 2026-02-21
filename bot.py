@@ -29,6 +29,12 @@ def get_drive_service():
         print(f"❌ Errore caricamento credenziali: {e}")
         return None
 
+def pulisci_testo(testo):
+    """Pulisce il testo da spazi e caratteri strani per fare un confronto sicuro."""
+    if pd.isna(testo):
+        return ""
+    return str(testo).strip().lower().replace(" ", "").replace("_", "").replace(".mp4", "")
+
 def main():
     service = get_drive_service()
     if not service: return
@@ -38,15 +44,18 @@ def main():
     giorno_sett_en = now.strftime("%A")
     
     giorni_it = {
-        "Monday": "Lunedi", "Tuesday": "Martedi", "Wednesday": "Mercoledi",
-        "Thursday": "Giovedi", "Friday": "Venerdi", "Saturday": "Sabato", "Sunday": "Domenica"
+        "Monday": "Lunedì", "Tuesday": "Martedì", "Wednesday": "Mercoledì",
+        "Thursday": "Giovedì", "Friday": "Venerdì", "Saturday": "Sabato", "Sunday": "Domenica"
     }
     
-    fascia = "Mattina" if now.hour < 15 else "Sera"
-    giorno_it = giorni_it.get(giorno_sett_en, "Lunedi")
-    nome_file_cercato = f"{giorno_it}_{fascia}"
+    # Adatta la "fase" in base all'orario per corrispondere a Mattina/Pomeriggio
+    fascia = "Mattina" if now.hour < 15 else "Pomeriggio"
+    giorno_it = giorni_it.get(giorno_sett_en, "Lunedì")
     
-    print(f"🔍 Ricerca Globale -> Settimana: {settimana_anno} | File: {nome_file_cercato}")
+    # Nome del video che cerca su Drive
+    nome_video_cercato = f"{giorno_it.replace('ì','i')}_{'Sera' if fascia == 'Pomeriggio' else 'Mattina'}"
+    
+    print(f"🔍 Ricerca Globale -> Settimana: {settimana_anno} | Giorno: {giorno_it} | Fase: {fascia}")
 
     # 1. CERCA LA CARTELLA
     query_folder = f"mimeType = 'application/vnd.google-apps.folder' and (name = '{settimana_anno}' or name = 'Settimana_{settimana_anno}') and trashed = false"
@@ -61,18 +70,19 @@ def main():
     print(f"✅ Cartella corretta trovata: {folders[0]['name']}")
 
     # 2. CERCA IL VIDEO
-    query_video = f"'{week_folder_id}' in parents and name contains '{nome_file_cercato}' and trashed = false"
+    query_video = f"'{week_folder_id}' in parents and name contains '{nome_video_cercato}' and trashed = false"
     video_results = service.files().list(q=query_video).execute()
     videos = video_results.get('files', [])
 
     if not videos:
-        print(f"❌ ERRORE: Video '{nome_file_cercato}' non trovato nella cartella.")
+        print(f"❌ ERRORE: Video '{nome_video_cercato}' non trovato nella cartella.")
         return
 
     video = videos[0]
     print(f"✅ Video trovato: {video['name']}")
 
     # 3. CERCA E LEGGI L'EXCEL O GOOGLE SHEET
+    # Ora cerca specificamente "Piano_Editoriale" nel nome del file
     query_excel = f"'{week_folder_id}' in parents and name contains 'Piano_Editoriale' and trashed = false"
     excel_results = service.files().list(q=query_excel, fields="files(id, name, mimeType)").execute()
     excels = excel_results.get('files', [])
@@ -98,30 +108,36 @@ def main():
         try:
             df = pd.read_excel(fh_excel)
             
-            # --- NUOVA RICERCA SUPER ELASTICA ---
-            # Rendiamo il nome del video "pulito" (togliamo .mp4 e lo mettiamo minuscolo)
-            nome_video_pulito = video['name'].replace('.mp4', '').strip().lower()
+            # --- NUOVA RICERCA: TROVA LA RIGA IN BASE AL GIORNO E ALLA FASE ---
+            giorno_pulito = pulisci_testo(giorno_it)
+            fase_pulita = pulisci_testo(fascia)
             
             riga = pd.DataFrame()
-            if 'File' in df.columns:
-                riga = df[df['File'].astype(str).str.lower().str.contains(nome_video_pulito, na=False)]
-            elif 'Nome File' in df.columns:
-                riga = df[df['Nome File'].astype(str).str.lower().str.contains(nome_video_pulito, na=False)]
             
-            if not riga.empty:
-                descrizione = str(riga.iloc[0]['Descrizione'])
+            # Cerca le colonne "Giorno" e "Fase" o varianti vicine
+            colonna_giorno = next((col for col in df.columns if "giorno" in str(col).lower()), None)
+            colonna_fase = next((col for col in df.columns if "fase" in str(col).lower()), None)
+            colonna_descrizione = next((col for col in df.columns if "descrizione" in str(col).lower()), None)
+
+            if colonna_giorno and colonna_fase and colonna_descrizione:
+                # Trova la riga che corrisponde a oggi (es. "Sabato" e "Pomeriggio")
+                mask_giorno = df[colonna_giorno].apply(pulisci_testo) == giorno_pulito
+                mask_fase = df[colonna_fase].apply(pulisci_testo) == fase_pulita
+                riga = df[mask_giorno & mask_fase]
                 
-                # Hashtag opzionale
-                hashtag = str(riga.iloc[0]['Hashtag']) if 'Hashtag' in df.columns else ""
-                if hashtag == "nan": hashtag = ""
-                
-                caption_telegram = f"{descrizione}\n\n{hashtag}".strip()
-                
-                if len(caption_telegram) > 1024:
-                    caption_telegram = caption_telegram[:1000] + "...\n#amen"
-                print("✅ Didascalia estratta perfettamente dal Foglio Google!")
+                if not riga.empty:
+                    descrizione = str(riga.iloc[0][colonna_descrizione])
+                    
+                    caption_telegram = f"{descrizione}".strip()
+                    
+                    if len(caption_telegram) > 1024:
+                        caption_telegram = caption_telegram[:1000] + "...\n#amen"
+                    print("✅ Didascalia estratta perfettamente dal Foglio Google!")
+                else:
+                    print(f"⚠️ Riga per '{giorno_it} {fascia}' NON TROVATA nel foglio.")
             else:
-                print(f"⚠️ Riga per '{nome_video_pulito}' NON TROVATA nel foglio. Colonne presenti: {list(df.columns)}")
+                 print(f"⚠️ Impossibile trovare le colonne Giorno, Fase o Descrizione nel foglio. Colonne presenti: {list(df.columns)}")
+
         except Exception as e:
             print(f"⚠️ Errore lettura Foglio: {e}")
     else:
