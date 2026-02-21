@@ -50,18 +50,18 @@ def main():
     video = videos[0]
     print(f"✅ Video trovato: {video['name']}")
 
-    # 2. CERCA IL FOGLIO IN TUTTO IL DRIVE (Devi averlo condiviso con l'email del bot!)
-    query_excel = "(mimeType='application/vnd.google-apps.spreadsheet' or mimeType='text/csv' or name contains 'Piano') and trashed = false"
+    # 2. CERCA IL FOGLIO IN TUTTO IL DRIVE (Ma solo se si chiama Piano_Editoriale!)
+    query_excel = "name contains 'Piano_Editoriale' and trashed = false"
     excels = service.files().list(q=query_excel, fields="files(id, name, mimeType)", orderBy="modifiedTime desc").execute().get('files', [])
 
     caption_telegram = f"🎬 Ecco il video di {giorno_it} {fascia}!\n\nSia Gloria a Dio!" 
 
     if not excels:
-        print("🚨 ATTENZIONE: NESSUN FOGLIO TROVATO! 🚨")
-        print("Motivo: Non hai cliccato 'Condividi' sul file Excel e non hai inserito la mia email.")
+        print("🚨 ATTENZIONE: NESSUN FILE 'Piano_Editoriale' TROVATO! 🚨")
+        print("Assicurati di aver condiviso il file corretto con l'email qui sopra.")
     else:
         excel_file = excels[0]
-        print(f"✅ Foglio trovato: {excel_file['name']}")
+        print(f"✅ Foglio corretto trovato: {excel_file['name']}")
         
         if excel_file['mimeType'] == 'application/vnd.google-apps.spreadsheet':
             req_excel = service.files().export_media(fileId=excel_file['id'], mimeType='text/csv')
@@ -74,7 +74,11 @@ def main():
         fh_excel.seek(0)
         
         try:
-            df = pd.read_csv(fh_excel) if 'csv' in excel_file['mimeType'] or excel_file['name'].endswith('.csv') else pd.read_excel(fh_excel)
+            # Riconosce automaticamente se è un CSV o un Excel
+            if 'csv' in excel_file['mimeType'] or excel_file['name'].endswith('.csv'):
+                df = pd.read_csv(fh_excel)
+            else:
+                df = pd.read_excel(fh_excel)
             
             col_sett = next((col for col in df.columns if "settimana" in str(col).lower()), None)
             col_giorno = next((col for col in df.columns if "giorno" in str(col).lower()), None)
@@ -98,7 +102,7 @@ def main():
                 if descrizione and descrizione != "nan":
                     caption_telegram = descrizione.strip()
                     if len(caption_telegram) > 1024: caption_telegram = caption_telegram[:1000] + "...\n#amen"
-                    print("✅ Testo estratto con successo!")
+                    print("✅ Testo estratto con successo dal file Piano Editoriale!")
             else:
                 print(f"⚠️ Riga non trovata nel foglio per Settimana {settimana_anno}, {giorno_it}, {fascia}.")
         except Exception as e:
