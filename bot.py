@@ -11,7 +11,6 @@ import io
 # --- CONFIGURAZIONE ---
 TELEGRAM_TOKEN = "8083806105:AAGQTsM8kmogmc4UMkMODnsT_5HK-viO7n4"
 CHAT_ID = "-1003619559876"
-FOLDER_ID_ROOT = "1u7VGIK8OPFcuNOBhEtTG1UHCoFlwyVhA"
 
 def get_drive_service():
     try:
@@ -39,47 +38,43 @@ def main():
     giorno_it = giorni_it.get(giorno_sett_en, "Lunedi")
     nome_file_cercato = f"{giorno_it}_{fascia}"
     
-    print(f"Ricerca -> Settimana: {settimana_anno} | File: {nome_file_cercato}")
+    print(f"Ricerca Globale -> Settimana: {settimana_anno} | File: {nome_file_cercato}")
 
-    # 1. CERCA LA CARTELLA DELLA SETTIMANA
-    query_folder = f"'{FOLDER_ID_ROOT}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    # 1. CERCA LA CARTELLA DELLA SETTIMANA OVUNQUE (Radar Globale)
+    query_folder = f"mimeType = 'application/vnd.google-apps.folder' and name contains '{settimana_anno}' and trashed = false"
     results = service.files().list(q=query_folder).execute()
     folders = results.get('files', [])
 
-    week_folder_id = None
-    for f in folders:
-        if settimana_anno in f['name']:
-            week_folder_id = f['id']
-            print(f"Cartella trovata: {f['name']}")
-            break
-
-    if not week_folder_id:
-        print(f"Errore: Cartella settimana {settimana_anno} non trovata.")
+    if not folders:
+        print(f"Errore: Nessuna cartella trovata con il numero '{settimana_anno}' nel nome.")
+        print("Soluzione: Condividi la cartella su Drive con l'email del Service Account come Editor!")
         return
 
-    # 2. CERCA IL VIDEO
+    week_folder_id = folders[0]['id']
+    print(f"✅ Cartella trovata: {folders[0]['name']}")
+
+    # 2. CERCA IL VIDEO NELLA CARTELLA TROVATA
     query_video = f"'{week_folder_id}' in parents and name contains '{nome_file_cercato}' and trashed = false"
     video_results = service.files().list(q=query_video).execute()
     videos = video_results.get('files', [])
 
     if not videos:
-        print(f"Errore: Video '{nome_file_cercato}' non trovato nella cartella.")
+        print(f"Errore: Video '{nome_file_cercato}' non trovato all'interno della cartella.")
         return
 
     video = videos[0]
-    print(f"Video trovato: {video['name']} (ID: {video['id']})")
+    print(f"✅ Video trovato: {video['name']}")
 
     # 3. CERCA E LEGGI IL PIANO EDITORIALE (EXCEL)
     query_excel = f"'{week_folder_id}' in parents and name contains 'Piano_Editoriale' and trashed = false"
     excel_results = service.files().list(q=query_excel).execute()
     excels = excel_results.get('files', [])
 
-    # Didascalia di base in caso di emergenza
     caption_telegram = f"🎬 Ecco il video di {giorno_it} {fascia}!\n\nSia Gloria a Dio!" 
 
     if excels:
         excel_file = excels[0]
-        print(f"File Excel trovato: {excel_file['name']}")
+        print(f"✅ File Excel trovato: {excel_file['name']}")
         
         req_excel = service.files().get_media(fileId=excel_file['id'])
         fh_excel = io.BytesIO()
@@ -91,29 +86,24 @@ def main():
         
         try:
             df = pd.read_excel(fh_excel)
-            # Cerca la riga dove la colonna 'Nome File' è uguale al nome del video trovato
             riga = df[df['Nome File'] == video['name']]
             
             if not riga.empty:
                 descrizione = str(riga.iloc[0]['Descrizione'])
                 hashtag = str(riga.iloc[0]['Hashtag'])
-                
-                # Assembla la didascalia finale
                 caption_telegram = f"{descrizione}\n\n{hashtag}"
                 
-                # Telegram supporta max 1024 caratteri per le didascalie media. Taglio di sicurezza.
                 if len(caption_telegram) > 1024:
                     caption_telegram = caption_telegram[:1000] + "...\n#amen"
-                
                 print("✅ Didascalia estratta perfettamente dall'Excel!")
             else:
-                print("⚠️ Video non trovato nell'Excel, uso didascalia base.")
+                print("⚠️ Video non presente nell'Excel, uso didascalia base.")
         except Exception as e:
-            print(f"⚠️ Errore nella lettura dell'Excel: {e}")
+            print(f"⚠️ Errore Excel: {e}")
     else:
         print("⚠️ Nessun file Excel trovato. Uso didascalia base.")
 
-    # 4. DOWNLOAD VIDEO E INVIO A TELEGRAM
+    # 4. DOWNLOAD VIDEO E INVIO
     request = service.files().get_media(fileId=video['id'])
     fh_video = io.BytesIO()
     downloader = MediaIoBaseDownload(fh_video, request)
@@ -128,10 +118,10 @@ def main():
     files = {'video': (video['name'], fh_video, 'video/mp4')}
     data = {'chat_id': CHAT_ID, 'caption': caption_telegram}
     
-    print("Inviando il pacchetto a Telegram...")
+    print("Inviando a Telegram...")
     r = requests.post(url, files=files, data=data)
     if r.status_code == 200:
-        print("✅ SUCCESSO: Video e Didascalia inviati al gruppo!")
+        print("🚀 SUCCESSO: Video e Didascalia pubblicati sul gruppo!")
     else:
         print(f"❌ Errore Telegram: {r.text}")
 
