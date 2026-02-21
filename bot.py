@@ -12,19 +12,13 @@ import io
 TELEGRAM_TOKEN = "8083806105:AAGQTsM8kmogmc4UMkMODnsT_5HK-viO7n4"
 CHAT_ID = "-1003619559876"
 
-# INDIRIZZO DI RICERCA FISSATO: Cartella "PastoreAI_2026_Archivio"
-ROOT_FOLDER_ID = "1u7VGIK8OPFcuNOBhEtTG1UHCoFlwyVhA"
-
 def get_drive_service():
     try:
         info = json.loads(os.environ['GOOGLE_APPLICATION_CREDENTIALS'])
-        
         print("\n" + "="*60)
         print("🤖 CIAO! SONO IL BOT DI GITHUB.")
         print(f"La mia email è: 👉  {info['client_email']}  👈")
-        print("Assicurati che io sia 'Editor' della cartella principale!")
         print("="*60 + "\n")
-        
         creds = service_account.Credentials.from_service_account_info(info)
         return build('drive', 'v3', credentials=creds)
     except Exception as e:
@@ -55,21 +49,21 @@ def main():
     
     nome_video_cercato = f"{giorno_it.replace('ì','i')}_{'Sera' if fascia == 'Pomeriggio' else 'Mattina'}"
     
-    print(f"🔍 Ricerca Mirata -> Settimana: {settimana_anno} | Giorno: {giorno_it} | Fase: {fascia}")
+    print(f"🔍 Ricerca -> Settimana: {settimana_anno} | Giorno: {giorno_it} | Fase: {fascia}")
 
-    # 1. CERCA LA CARTELLA VIDEO SOLO DENTRO L'ARCHIVIO PRINCIPALE
-    query_folder = f"'{ROOT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and (name = '{settimana_anno}' or name = 'Settimana_{settimana_anno}') and trashed = false"
+    # 1. CERCA LA CARTELLA (Usa il radar globale che funziona bene)
+    query_folder = f"mimeType = 'application/vnd.google-apps.folder' and (name = '{settimana_anno}' or name = 'Settimana_{settimana_anno}') and trashed = false"
     results = service.files().list(q=query_folder).execute()
     folders = results.get('files', [])
 
     if not folders:
-        print(f"❌ ERRORE: Nessuna cartella trovata per la settimana {settimana_anno} all'interno dell'Archivio.")
+        print(f"❌ ERRORE: Nessuna cartella trovata per la settimana {settimana_anno}.")
         return
 
     week_folder_id = folders[0]['id']
-    print(f"✅ Cartella settimanale trovata: {folders[0]['name']}")
+    print(f"✅ Cartella trovata: {folders[0]['name']}")
 
-    # 2. CERCA IL VIDEO SOLO NELLA CARTELLA DELLA SETTIMANA
+    # 2. CERCA IL VIDEO SOLO NELLA CARTELLA TROVATA
     query_video = f"'{week_folder_id}' in parents and name contains '{nome_video_cercato}' and trashed = false"
     video_results = service.files().list(q=query_video).execute()
     videos = video_results.get('files', [])
@@ -81,7 +75,7 @@ def main():
     video = videos[0]
     print(f"✅ Video trovato: {video['name']}")
 
-    # 3. CERCA IL PIANO EDITORIALE SOLO NELLA CARTELLA DELLA SETTIMANA
+    # 3. CERCA IL PIANO EDITORIALE *SOLO ED ESCLUSIVAMENTE* NELLA CARTELLA DELLA SETTIMANA
     query_excel = f"'{week_folder_id}' in parents and name contains 'Piano_Editoriale' and trashed = false"
     excel_results = service.files().list(q=query_excel, fields="files(id, name, mimeType)").execute()
     excels = excel_results.get('files', [])
@@ -90,7 +84,7 @@ def main():
 
     if excels:
         excel_file = excels[0]
-        print(f"✅ Foglio Editoriale trovato: {excel_file['name']}")
+        print(f"✅ Foglio Editoriale trovato DENTRO la cartella: {excel_file['name']}")
         
         if excel_file['mimeType'] == 'application/vnd.google-apps.spreadsheet':
             req_excel = service.files().export_media(fileId=excel_file['id'], mimeType='text/csv')
@@ -120,7 +114,6 @@ def main():
             col_file = next((col for col in df.columns if "file" in str(col).lower()), None)
             
             if col_giorno and col_fase:
-                # Se c'è la colonna settimana la usa, altrimenti si basa solo su giorno e fase
                 mask_giorno = df[col_giorno].apply(pulisci_testo) == pulisci_testo(giorno_it)
                 mask_fase = df[col_fase].apply(pulisci_testo) == pulisci_testo(fascia)
                 
@@ -134,7 +127,7 @@ def main():
                     descrizione = str(riga.iloc[0][col_desc]).strip() if col_desc else ""
                     testo_file = str(riga.iloc[0][col_file]).strip() if col_file else ""
                     
-                    # Fix automatico se le colonne sono invertite/sfalsate
+                    # Fix automatico per le colonne invertite
                     if ("http" in descrizione or descrizione == "" or descrizione == "nan") and testo_file != "nan" and len(testo_file) > 10:
                         descrizione = testo_file
 
