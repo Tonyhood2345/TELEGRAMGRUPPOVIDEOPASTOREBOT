@@ -51,7 +51,7 @@ def main():
     
     print(f"🔍 Ricerca -> Settimana: {settimana_anno} | Giorno: {giorno_it} | Fase: {fascia}")
 
-    # 1. CERCA LA CARTELLA (Usa il radar globale che funziona bene)
+    # 1. CERCA LA CARTELLA (Radar Globale - non limitato all'archivio)
     query_folder = f"mimeType = 'application/vnd.google-apps.folder' and (name = '{settimana_anno}' or name = 'Settimana_{settimana_anno}') and trashed = false"
     results = service.files().list(q=query_folder).execute()
     folders = results.get('files', [])
@@ -63,7 +63,7 @@ def main():
     week_folder_id = folders[0]['id']
     print(f"✅ Cartella trovata: {folders[0]['name']}")
 
-    # 2. CERCA IL VIDEO SOLO NELLA CARTELLA TROVATA
+    # 2. CERCA IL VIDEO (Solo dentro la cartella trovata)
     query_video = f"'{week_folder_id}' in parents and name contains '{nome_video_cercato}' and trashed = false"
     video_results = service.files().list(q=query_video).execute()
     videos = video_results.get('files', [])
@@ -75,16 +75,16 @@ def main():
     video = videos[0]
     print(f"✅ Video trovato: {video['name']}")
 
-    # 3. CERCA IL PIANO EDITORIALE *SOLO ED ESCLUSIVAMENTE* NELLA CARTELLA DELLA SETTIMANA
-    query_excel = f"'{week_folder_id}' in parents and name contains 'Piano_Editoriale' and trashed = false"
-    excel_results = service.files().list(q=query_excel, fields="files(id, name, mimeType)").execute()
+    # 3. CERCA IL PIANO EDITORIALE (Radar Globale su TUTTO il tuo Drive)
+    query_excel = f"name contains 'Piano_Editoriale' and trashed = false"
+    excel_results = service.files().list(q=query_excel, fields="files(id, name, mimeType)", orderBy="modifiedTime desc").execute()
     excels = excel_results.get('files', [])
 
     caption_telegram = f"🎬 Ecco il video di {giorno_it} {fascia}!\n\nSia Gloria a Dio!" 
 
     if excels:
         excel_file = excels[0]
-        print(f"✅ Foglio Editoriale trovato DENTRO la cartella: {excel_file['name']}")
+        print(f"✅ Foglio Editoriale trovato su Drive: {excel_file['name']}")
         
         if excel_file['mimeType'] == 'application/vnd.google-apps.spreadsheet':
             req_excel = service.files().export_media(fileId=excel_file['id'], mimeType='text/csv')
@@ -127,7 +127,7 @@ def main():
                     descrizione = str(riga.iloc[0][col_desc]).strip() if col_desc else ""
                     testo_file = str(riga.iloc[0][col_file]).strip() if col_file else ""
                     
-                    # Fix automatico per le colonne invertite
+                    # Fix automatico per le colonne invertite nel foglio (se hai inserito il testo sotto "File")
                     if ("http" in descrizione or descrizione == "" or descrizione == "nan") and testo_file != "nan" and len(testo_file) > 10:
                         descrizione = testo_file
 
@@ -136,7 +136,7 @@ def main():
                         
                         if len(caption_telegram) > 1024:
                             caption_telegram = caption_telegram[:1000] + "...\n#amen"
-                        print("✅ Didascalia estratta perfettamente dal Foglio locale!")
+                        print("✅ Didascalia estratta perfettamente dal Foglio!")
                     else:
                         print("⚠️ Didascalia vuota nella riga del foglio.")
                 else:
@@ -147,7 +147,7 @@ def main():
         except Exception as e:
             print(f"⚠️ Errore lettura Foglio: {e}")
     else:
-        print("⚠️ Nessun file 'Piano_Editoriale' trovato nella cartella. Uso didascalia base.")
+        print("⚠️ Nessun file 'Piano_Editoriale' trovato in Drive. Uso didascalia base.")
 
     # 4. DOWNLOAD VIDEO E INVIO A TELEGRAM
     request = service.files().get_media(fileId=video['id'])
