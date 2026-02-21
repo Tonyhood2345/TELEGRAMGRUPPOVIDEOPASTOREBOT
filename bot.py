@@ -33,7 +33,7 @@ def pulisci_testo(testo):
     """Pulisce il testo da spazi e caratteri strani per fare un confronto sicuro."""
     if pd.isna(testo):
         return ""
-    return str(testo).strip().lower().replace(" ", "").replace("_", "").replace(".mp4", "")
+    return str(testo).strip().lower().replace(" ", "").replace("_", "").replace("ì", "i").replace("è", "e")
 
 def main():
     service = get_drive_service()
@@ -48,16 +48,14 @@ def main():
         "Thursday": "Giovedì", "Friday": "Venerdì", "Saturday": "Sabato", "Sunday": "Domenica"
     }
     
-    # Adatta la "fase" in base all'orario per corrispondere a Mattina/Pomeriggio
     fascia = "Mattina" if now.hour < 15 else "Pomeriggio"
     giorno_it = giorni_it.get(giorno_sett_en, "Lunedì")
     
-    # Nome del video che cerca su Drive
     nome_video_cercato = f"{giorno_it.replace('ì','i')}_{'Sera' if fascia == 'Pomeriggio' else 'Mattina'}"
     
-    print(f"🔍 Ricerca Globale -> Settimana: {settimana_anno} | Giorno: {giorno_it} | Fase: {fascia}")
+    print(f"🔍 Ricerca -> Settimana: {settimana_anno} | Giorno: {giorno_it} | Fase: {fascia}")
 
-    # 1. CERCA LA CARTELLA
+    # 1. CERCA LA CARTELLA VIDEO
     query_folder = f"mimeType = 'application/vnd.google-apps.folder' and (name = '{settimana_anno}' or name = 'Settimana_{settimana_anno}') and trashed = false"
     results = service.files().list(q=query_folder).execute()
     folders = results.get('files', [])
@@ -75,28 +73,31 @@ def main():
     videos = video_results.get('files', [])
 
     if not videos:
-        print(f"❌ ERRORE: Video '{nome_video_cercato}' non trovato nella cartella.")
+        print(f"❌ ERRORE: Video '{nome_video_cercato}' non trovato nella cartella {folders[0]['name']}.")
         return
 
     video = videos[0]
     print(f"✅ Video trovato: {video['name']}")
 
-    # 3. CERCA E LEGGI L'EXCEL O GOOGLE SHEET
-    # Ora cerca specificamente "Piano_Editoriale" nel nome del file
-    query_excel = f"'{week_folder_id}' in parents and name contains 'Piano_Editoriale' and trashed = false"
-    excel_results = service.files().list(q=query_excel, fields="files(id, name, mimeType)").execute()
+    # 3. CERCA E LEGGI IL PIANO EDITORIALE (RICERCA GLOBALE SU DRIVE)
+    # Cerca il file ovunque in Drive!
+    query_excel = f"name contains 'Piano_Editoriale' and trashed = false"
+    excel_results = service.files().list(q=query_excel, fields="files(id, name, mimeType)", orderBy="modifiedTime desc").execute()
     excels = excel_results.get('files', [])
 
     caption_telegram = f"🎬 Ecco il video di {giorno_it} {fascia}!\n\nSia Gloria a Dio!" 
 
     if excels:
         excel_file = excels[0]
-        print(f"✅ Foglio trovato: {excel_file['name']}")
+        print(f"✅ Foglio Editoriale trovato su Drive: {excel_file['name']}")
         
         if excel_file['mimeType'] == 'application/vnd.google-apps.spreadsheet':
-            req_excel = service.files().export_media(fileId=excel_file['id'], mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            # Esporta come CSV perché è solido e combacia col formato che mi hai inviato
+            req_excel = service.files().export_media(fileId=excel_file['id'], mimeType='text/csv')
+            is_csv = True
         else:
             req_excel = service.files().get_media(fileId=excel_file['id'])
+            is_csv = False
             
         fh_excel = io.BytesIO()
         dl_excel = MediaIoBaseDownload(fh_excel, req_excel)
@@ -106,42 +107,52 @@ def main():
         fh_excel.seek(0)
         
         try:
-            df = pd.read_excel(fh_excel)
+            # Se è CSV lo leggiamo con read_csv, altrimenti con read_excel
+            if is_csv or excel_file['name'].endswith('.csv'):
+                df = pd.read_csv(fh_excel)
+            else:
+                df = pd.read_excel(fh_excel)
             
-            # --- NUOVA RICERCA: TROVA LA RIGA IN BASE AL GIORNO E ALLA FASE ---
-            giorno_pulito = pulisci_testo(giorno_it)
-            fase_pulita = pulisci_testo(fascia)
+            # Troviamo le colonne in modo dinamico
+            col_sett = next((col for col in df.columns if "settimana" in str(col).lower()), None)
+            col_giorno = next((col for col in df.columns if "giorno" in str(col).lower()), None)
+            col_fase = next((col for col in df.columns if "fase" in str(col).lower()), None)
+            col_desc = next((col for col in df.columns if "descrizione" in str(col).lower()), None)
+            col_file = next((col for col in df.columns if "file" in str(col).lower()), None)
             
-            riga = pd.DataFrame()
-            
-            # Cerca le colonne "Giorno" e "Fase" o varianti vicine
-            colonna_giorno = next((col for col in df.columns if "giorno" in str(col).lower()), None)
-            colonna_fase = next((col for col in df.columns if "fase" in str(col).lower()), None)
-            colonna_descrizione = next((col for col in df.columns if "descrizione" in str(col).lower()), None)
-
-            if colonna_giorno and colonna_fase and colonna_descrizione:
-                # Trova la riga che corrisponde a oggi (es. "Sabato" e "Pomeriggio")
-                mask_giorno = df[colonna_giorno].apply(pulisci_testo) == giorno_pulito
-                mask_fase = df[colonna_fase].apply(pulisci_testo) == fase_pulita
-                riga = df[mask_giorno & mask_fase]
+            if col_sett and col_giorno and col_fase:
+                # Filtraggio esatto della riga incrociando: Settimana + Giorno + Mattina/Pomeriggio
+                mask_sett = df[col_sett].astype(str).str.strip() == str(int(settimana_anno))
+                mask_giorno = df[col_giorno].apply(pulisci_testo) == pulisci_testo(giorno_it)
+                mask_fase = df[col_fase].apply(pulisci_testo) == pulisci_testo(fascia)
+                
+                riga = df[mask_sett & mask_giorno & mask_fase]
                 
                 if not riga.empty:
-                    descrizione = str(riga.iloc[0][colonna_descrizione])
+                    descrizione = str(riga.iloc[0][col_desc]).strip() if col_desc else ""
+                    testo_file = str(riga.iloc[0][col_file]).strip() if col_file else ""
                     
-                    caption_telegram = f"{descrizione}".strip()
-                    
-                    if len(caption_telegram) > 1024:
-                        caption_telegram = caption_telegram[:1000] + "...\n#amen"
-                    print("✅ Didascalia estratta perfettamente dal Foglio Google!")
+                    # INTELLIGENZA ARTIFICIALE: Corregge il tuo errore di incollaggio sulle colonne sfalsate!
+                    if ("http" in descrizione or descrizione == "" or descrizione == "nan") and testo_file != "nan" and len(testo_file) > 10:
+                        descrizione = testo_file
+
+                    if descrizione and descrizione != "nan":
+                        caption_telegram = descrizione.strip()
+                        
+                        if len(caption_telegram) > 1024:
+                            caption_telegram = caption_telegram[:1000] + "...\n#amen"
+                        print("✅ Didascalia estratta perfettamente dal Foglio Generale (con fix automatico degli errori nelle colonne)!")
+                    else:
+                        print("⚠️ Didascalia vuota nella riga del foglio.")
                 else:
-                    print(f"⚠️ Riga per '{giorno_it} {fascia}' NON TROVATA nel foglio.")
+                    print(f"⚠️ Riga Settimana:{int(settimana_anno)} Giorno:{giorno_it} Fase:{fascia} NON TROVATA nel foglio.")
             else:
-                 print(f"⚠️ Impossibile trovare le colonne Giorno, Fase o Descrizione nel foglio. Colonne presenti: {list(df.columns)}")
+                 print(f"⚠️ Impossibile trovare le colonne nel foglio. Colonne presenti: {list(df.columns)}")
 
         except Exception as e:
             print(f"⚠️ Errore lettura Foglio: {e}")
     else:
-        print("⚠️ Nessun Piano Editoriale trovato nella cartella. Uso didascalia base.")
+        print("⚠️ Nessun file 'Piano_Editoriale' trovato in tutto Google Drive. Uso didascalia base.")
 
     # 4. DOWNLOAD VIDEO E INVIO A TELEGRAM
     request = service.files().get_media(fileId=video['id'])
