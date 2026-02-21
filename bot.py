@@ -48,7 +48,7 @@ def main():
     
     print(f"🔍 Ricerca Globale -> Settimana: {settimana_anno} | File: {nome_file_cercato}")
 
-    # 1. CERCA LA CARTELLA (Cerca esattamente '08' o 'Settimana_08')
+    # 1. CERCA LA CARTELLA
     query_folder = f"mimeType = 'application/vnd.google-apps.folder' and (name = '{settimana_anno}' or name = 'Settimana_{settimana_anno}') and trashed = false"
     results = service.files().list(q=query_folder).execute()
     folders = results.get('files', [])
@@ -72,7 +72,7 @@ def main():
     video = videos[0]
     print(f"✅ Video trovato: {video['name']}")
 
-    # 3. CERCA E LEGGI L'EXCEL O GOOGLE SHEET (Piano Editoriale)
+    # 3. CERCA E LEGGI L'EXCEL O GOOGLE SHEET
     query_excel = f"'{week_folder_id}' in parents and name contains 'Piano_Editoriale' and trashed = false"
     excel_results = service.files().list(q=query_excel, fields="files(id, name, mimeType)").execute()
     excels = excel_results.get('files', [])
@@ -83,7 +83,6 @@ def main():
         excel_file = excels[0]
         print(f"✅ Foglio trovato: {excel_file['name']}")
         
-        # Se è un Google Sheet nativo, lo esporta come Excel, altrimenti lo scarica normalmente
         if excel_file['mimeType'] == 'application/vnd.google-apps.spreadsheet':
             req_excel = service.files().export_media(fileId=excel_file['id'], mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         else:
@@ -99,28 +98,30 @@ def main():
         try:
             df = pd.read_excel(fh_excel)
             
-            # Cerca la riga usando la colonna "File" (come nel tuo Google Sheet) o "Nome File"
+            # --- NUOVA RICERCA SUPER ELASTICA ---
+            # Rendiamo il nome del video "pulito" (togliamo .mp4 e lo mettiamo minuscolo)
+            nome_video_pulito = video['name'].replace('.mp4', '').strip().lower()
+            
             riga = pd.DataFrame()
             if 'File' in df.columns:
-                riga = df[df['File'] == video['name']]
+                riga = df[df['File'].astype(str).str.lower().str.contains(nome_video_pulito, na=False)]
             elif 'Nome File' in df.columns:
-                riga = df[df['Nome File'] == video['name']]
+                riga = df[df['Nome File'].astype(str).str.lower().str.contains(nome_video_pulito, na=False)]
             
             if not riga.empty:
                 descrizione = str(riga.iloc[0]['Descrizione'])
                 
-                # Se non c'è la colonna Hashtag, non va in errore
+                # Hashtag opzionale
                 hashtag = str(riga.iloc[0]['Hashtag']) if 'Hashtag' in df.columns else ""
                 if hashtag == "nan": hashtag = ""
                 
                 caption_telegram = f"{descrizione}\n\n{hashtag}".strip()
                 
-                # Taglio di sicurezza se la didascalia supera i limiti di Telegram
                 if len(caption_telegram) > 1024:
                     caption_telegram = caption_telegram[:1000] + "...\n#amen"
                 print("✅ Didascalia estratta perfettamente dal Foglio Google!")
             else:
-                print(f"⚠️ Video '{video['name']}' non presente nella colonna 'File'. Uso didascalia base.")
+                print(f"⚠️ Riga per '{nome_video_pulito}' NON TROVATA nel foglio. Colonne presenti: {list(df.columns)}")
         except Exception as e:
             print(f"⚠️ Errore lettura Foglio: {e}")
     else:
