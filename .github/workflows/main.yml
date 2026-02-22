@@ -2,8 +2,8 @@ name: Post Video a Telegram
 
 on:
   schedule:
-    - cron: '30 9 * * *'  # 10:30 Italiana
-    - cron: '30 18 * * *' # 19:30 Italiana
+    - cron: '30 9 * * *'  # 10:30 Italiana (o 11:30 con ora legale)
+    - cron: '30 18 * * *' # 19:30 Italiana (o 20:30 con ora legale)
   workflow_dispatch:      # <--- QUESTO ABILITA IL TASTO MANUALE
 
 jobs:
@@ -25,4 +25,6 @@ jobs:
       - name: Esegui Bot
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GDRIVE_JSON }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python bot.py
