@@ -4,16 +4,15 @@ import datetime
 import requests
 import pandas as pd
 from google.oauth2 import service_account
-from google.oauth2.credentials import Credentials # <-- NUOVO IMPORTO PER YOUTUBE
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload # <-- NUOVO IMPORTO
+from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
 # --- VARIABILI SEGRETE PRESE DA GITHUB SECRETS ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 SHEET_ID = "1SYNQjLshCUe0mutORI85EOccI7BiOvjTeUS9Y16YwKQ"
 
-# --- NUOVI SECRETS PER YOUTUBE ---
 YT_CLIENT_ID = os.environ.get("YT_CLIENT_ID")
 YT_CLIENT_SECRET = os.environ.get("YT_CLIENT_SECRET")
 YT_REFRESH_TOKEN = os.environ.get("YT_REFRESH_TOKEN")
@@ -29,10 +28,9 @@ def get_drive_service():
 
 def get_youtube_service():
     if not all([YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN]):
-        print("⚠️ Credenziali YouTube mancanti nei Secrets. Salto l'upload su YouTube.")
+        print("⚠️ Credenziali YouTube mancanti nei Secrets.")
         return None
 
-    # Creiamo le credenziali usando il Refresh Token
     creds = Credentials(
         None,
         client_id=YT_CLIENT_ID,
@@ -52,11 +50,11 @@ def upload_to_youtube(youtube, file_path, title, description):
         'snippet': {
             'title': title,
             'description': description,
-            'tags': ['bot', 'automazione', 'fede'],
-            'categoryId': '22' # Categoria: Persone e Blog
+            'tags': ['fede', 'gesù', 'vangelo', 'preghiera'], # Puoi personalizzare i tag
+            'categoryId': '22' 
         },
         'status': {
-            'privacyStatus': 'private' # ⚠️ IMPOSTATO SU PRIVATO PER TEST. Cambia in 'public' quando sei pronto.
+            'privacyStatus': 'public' # 🟢 CAMBIATO IN PUBBLICO PER PERMETTERE L'ANTEPRIMA SU TELEGRAM
         }
     }
     
@@ -70,7 +68,7 @@ def upload_to_youtube(youtube, file_path, title, description):
             print(f"Caricamento YouTube al {int(status.progress() * 100)}%")
             
     print(f"✅ Video caricato su YouTube! ID: {response['id']}")
-    print(f"🔗 Link: https://youtu.be/{response['id']}")
+    return response['id'] # Restituisce l'ID per usarlo su Telegram
 
 def main():
     service_drive = get_drive_service()
@@ -78,7 +76,6 @@ def main():
     if not service_drive: return
 
     now = datetime.datetime.now()
-    
     settimana_sheet = str(int(now.strftime("%V"))) 
     settimana_folder = now.strftime("%V")
     
@@ -106,7 +103,7 @@ def main():
     video = videos[0]
     print(f"✅ Video trovato su Drive: {video['name']}")
 
-    # 3. CERCA IL FOGLIO
+    # 3. CERCA IL FOGLIO PER LA DESCRIZIONE
     caption_testo = f"🎬 Ecco il video di {giorno_it} {fascia}!\n\nSia Gloria a Dio!" 
     try:
         csv_export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
@@ -125,7 +122,7 @@ def main():
     except Exception as e:
         print(f"⚠️ Errore lettura Foglio Google: {e}")
 
-    # 4. SCARICA IL VIDEO FISICAMENTE (Necessario per YouTube)
+    # 4. SCARICA IL VIDEO FISICAMENTE
     print("📥 Scaricamento del video in corso...")
     file_path = "video_temp.mp4"
     request = service_drive.files().get_media(fileId=video['id'])
@@ -136,24 +133,36 @@ def main():
         while not done:
             status, done = downloader.next_chunk()
 
-    # 5. INVIA A TELEGRAM
-    if TELEGRAM_TOKEN and CHAT_ID:
-        print("🚀 Inviando a Telegram...")
-        # Adattiamo la caption per i limiti di Telegram
-        caption_tg = caption_testo if len(caption_testo) <= 1024 else caption_testo[:1000] + "...\n#amen"
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVideo"
-        with open(file_path, "rb") as video_file:
-            r = requests.post(url, files={'video': video_file}, data={'chat_id': CHAT_ID, 'caption': caption_tg})
-            if r.status_code == 200:
-                print("🌟 SUCCESSO! Video pubblicato su Telegram.")
-            else:
-                print(f"❌ Errore Telegram: {r.text}")
-
-    # 6. CARICA SU YOUTUBE
+    # 5. CARICA PRIMA SU YOUTUBE PER AVERE IL LINK
+    youtube_link = ""
     if service_youtube:
-        # Usa il nome del file (senza .mp4) come titolo del video, oppure usa una stringa fissa
-        titolo_youtube = f"Video di {giorno_it} {fascia}"
-        upload_to_youtube(service_youtube, file_path, titolo_youtube, caption_testo)
+        titolo_youtube = f"Riflessione di {giorno_it} {fascia}" # Titolo più carino per YouTube
+        video_id = upload_to_youtube(service_youtube, file_path, titolo_youtube, caption_testo)
+        if video_id:
+            youtube_link = f"https://youtu.be/{video_id}"
+
+    # 6. INVIA A TELEGRAM (SOLO TESTO CON LINK)
+    if TELEGRAM_TOKEN and CHAT_ID:
+        print("🚀 Inviando messaggio e link a Telegram...")
+        
+        # Componiamo il messaggio finale: Descrizione + Link
+        messaggio_tg = caption_testo
+        if youtube_link:
+            messaggio_tg += f"\n\n📺 <b>Guarda il video completo qui:</b>\n{youtube_link}"
+
+        # Per i messaggi di testo Telegram accetta fino a 4096 caratteri
+        if len(messaggio_tg) > 4000:
+            messaggio_tg = messaggio_tg[:4000] + "..."
+            
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        # Usiamo parse_mode HTML per far leggere il grassetto
+        data = {'chat_id': CHAT_ID, 'text': messaggio_tg, 'parse_mode': 'HTML'}
+        
+        r = requests.post(url, data=data)
+        if r.status_code == 200:
+            print("🌟 SUCCESSO! Messaggio con anteprima YouTube pubblicato su Telegram.")
+        else:
+            print(f"❌ Errore Telegram: {r.text}")
 
     # 7. PULIZIA
     if os.path.exists(file_path):
