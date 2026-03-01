@@ -50,11 +50,11 @@ def upload_to_youtube(youtube, file_path, title, description):
         'snippet': {
             'title': title,
             'description': description,
-            'tags': ['fede', 'gesù', 'vangelo', 'preghiera'], # Puoi personalizzare i tag
+            'tags': ['fede', 'gesù', 'vangelo', 'preghiera'],
             'categoryId': '22' 
         },
         'status': {
-            'privacyStatus': 'public' # 🟢 CAMBIATO IN PUBBLICO PER PERMETTERE L'ANTEPRIMA SU TELEGRAM
+            'privacyStatus': 'public' # 🟢 VIDEO PUBBLICO
         }
     }
     
@@ -68,7 +68,7 @@ def upload_to_youtube(youtube, file_path, title, description):
             print(f"Caricamento YouTube al {int(status.progress() * 100)}%")
             
     print(f"✅ Video caricato su YouTube! ID: {response['id']}")
-    return response['id'] # Restituisce l'ID per usarlo su Telegram
+    return response['id']
 
 def main():
     service_drive = get_drive_service()
@@ -136,33 +136,39 @@ def main():
     # 5. CARICA PRIMA SU YOUTUBE PER AVERE IL LINK
     youtube_link = ""
     if service_youtube:
-        titolo_youtube = f"Riflessione di {giorno_it} {fascia}" # Titolo più carino per YouTube
+        titolo_youtube = f"Riflessione di {giorno_it} {fascia}"
         video_id = upload_to_youtube(service_youtube, file_path, titolo_youtube, caption_testo)
         if video_id:
             youtube_link = f"https://youtu.be/{video_id}"
 
-    # 6. INVIA A TELEGRAM (SOLO TESTO CON LINK)
+    # 6. INVIA VIDEO + TESTO + LINK A TELEGRAM
     if TELEGRAM_TOKEN and CHAT_ID:
-        print("🚀 Inviando messaggio e link a Telegram...")
+        print("🚀 Inviando Video e Link a Telegram...")
         
-        # Componiamo il messaggio finale: Descrizione + Link
-        messaggio_tg = caption_testo
+        testo_finale = caption_testo
+        cta_youtube = ""
+        
         if youtube_link:
-            messaggio_tg += f"\n\n📺 <b>Guarda il video completo qui:</b>\n{youtube_link}"
+            # 🔴 Messaggio personalizzato con le emoticon sotto il video
+            cta_youtube = f"\n\n🔴 Se preferisci guardarlo su YouTube... clicca qui 👇\n🔗 {youtube_link}"
 
-        # Per i messaggi di testo Telegram accetta fino a 4096 caratteri
-        if len(messaggio_tg) > 4000:
-            messaggio_tg = messaggio_tg[:4000] + "..."
+        # Assicuriamoci di non superare i 1024 caratteri totali per la caption di Telegram
+        max_desc_len = 1024 - len(cta_youtube)
+        if len(testo_finale) > max_desc_len:
+            testo_finale = testo_finale[:max_desc_len-3] + "..."
             
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        # Usiamo parse_mode HTML per far leggere il grassetto
-        data = {'chat_id': CHAT_ID, 'text': messaggio_tg, 'parse_mode': 'HTML'}
-        
-        r = requests.post(url, data=data)
-        if r.status_code == 200:
-            print("🌟 SUCCESSO! Messaggio con anteprima YouTube pubblicato su Telegram.")
-        else:
-            print(f"❌ Errore Telegram: {r.text}")
+        caption_tg = testo_finale + cta_youtube
+            
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVideo"
+        with open(file_path, "rb") as video_file:
+            files = {'video': (video['name'], video_file, 'video/mp4')}
+            data = {'chat_id': CHAT_ID, 'caption': caption_tg, 'parse_mode': 'HTML'}
+            
+            r = requests.post(url, files=files, data=data)
+            if r.status_code == 200:
+                print("🌟 SUCCESSO! Video pubblicato su Telegram con il link in fondo.")
+            else:
+                print(f"❌ Errore Telegram: {r.text}")
 
     # 7. PULIZIA
     if os.path.exists(file_path):
