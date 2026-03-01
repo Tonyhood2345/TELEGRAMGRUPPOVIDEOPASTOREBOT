@@ -4,14 +4,19 @@ import datetime
 import requests
 import pandas as pd
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials # <-- NUOVO IMPORTO PER YOUTUBE
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-import io
+from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload # <-- NUOVO IMPORTO
 
 # --- VARIABILI SEGRETE PRESE DA GITHUB SECRETS ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 SHEET_ID = "1SYNQjLshCUe0mutORI85EOccI7BiOvjTeUS9Y16YwKQ"
+
+# --- NUOVI SECRETS PER YOUTUBE ---
+YT_CLIENT_ID = os.environ.get("YT_CLIENT_ID")
+YT_CLIENT_SECRET = os.environ.get("YT_CLIENT_SECRET")
+YT_REFRESH_TOKEN = os.environ.get("YT_REFRESH_TOKEN")
 
 def get_drive_service():
     if not os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
@@ -19,81 +24,94 @@ def get_drive_service():
         return None
         
     info = json.loads(os.environ['GOOGLE_APPLICATION_CREDENTIALS'])
-    print("\n" + "="*60)
-    print(f"👉 LA MIA EMAIL È: {info['client_email']} 👈")
-    print("CONDIVIDI LA CARTELLA VIDEO CON QUESTA EMAIL ALTRIMENTI NON LA VEDO!")
-    print("="*60 + "\n")
     creds = service_account.Credentials.from_service_account_info(info)
     return build('drive', 'v3', credentials=creds)
+
+def get_youtube_service():
+    if not all([YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN]):
+        print("⚠️ Credenziali YouTube mancanti nei Secrets. Salto l'upload su YouTube.")
+        return None
+
+    # Creiamo le credenziali usando il Refresh Token
+    creds = Credentials(
+        None,
+        client_id=YT_CLIENT_ID,
+        client_secret=YT_CLIENT_SECRET,
+        refresh_token=YT_REFRESH_TOKEN,
+        token_uri="https://oauth2.googleapis.com/token"
+    )
+    return build('youtube', 'v3', credentials=creds)
 
 def pulisci_testo(testo):
     if pd.isna(testo): return ""
     return str(testo).strip().lower().replace(" ", "").replace("_", "").replace("ì", "i").replace("è", "e")
 
-def main():
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("❌ ERRORE: TELEGRAM_TOKEN o CHAT_ID mancanti. Inseriscili nei Secrets di GitHub!")
-        return
+def upload_to_youtube(youtube, file_path, title, description):
+    print("🚀 Inizio caricamento su YouTube...")
+    body = {
+        'snippet': {
+            'title': title,
+            'description': description,
+            'tags': ['bot', 'automazione', 'fede'],
+            'categoryId': '22' # Categoria: Persone e Blog
+        },
+        'status': {
+            'privacyStatus': 'private' # ⚠️ IMPOSTATO SU PRIVATO PER TEST. Cambia in 'public' quando sei pronto.
+        }
+    }
+    
+    media = MediaFileUpload(file_path, chunksize=-1, resumable=True, mimetype='video/mp4')
+    request = youtube.videos().insert(part=','.join(body.keys()), body=body, media_body=media)
+    
+    response = None
+    while response is None:
+        status, response = request.next_chunk()
+        if status:
+            print(f"Caricamento YouTube al {int(status.progress() * 100)}%")
+            
+    print(f"✅ Video caricato su YouTube! ID: {response['id']}")
+    print(f"🔗 Link: https://youtu.be/{response['id']}")
 
-    service = get_drive_service()
-    if not service: return
+def main():
+    service_drive = get_drive_service()
+    service_youtube = get_youtube_service()
+    if not service_drive: return
 
     now = datetime.datetime.now()
     
-    # --- LOGICA DI SINCRONIZZAZIONE CON COLAB v21.13 ---
-    # 1. Per il FOGLIO usiamo il numero senza zero (es. "9")
     settimana_sheet = str(int(now.strftime("%V"))) 
-    
-    # 2. Per la CARTELLA DRIVE usiamo il numero con lo zero (es. "09")
     settimana_folder = now.strftime("%V")
     
     giorno_sett_en = now.strftime("%A")
     giorni_it = {"Monday": "Lunedì", "Tuesday": "Martedì", "Wednesday": "Mercoledì", "Thursday": "Giovedì", "Friday": "Venerdì", "Saturday": "Sabato", "Sunday": "Domenica"}
     
-    # 3. Fascia Oraria: Colab scrive "Pomeriggio", quindi cerchiamo "Pomeriggio"
     fascia = "Mattina" if now.hour < 15 else "Pomeriggio"
     giorno_it = giorni_it.get(giorno_sett_en, "Lunedì")
-    
-    # 4. Nome File: Deve coincidere con Colab (es. Lunedi_Pomeriggio)
     nome_video_cercato = f"{giorno_it.replace('ì','i')}_{fascia}"
-    
-    print(f"🔍 CONFIGURAZIONE DI OGGI:")
-    print(f"   📅 Settimana Sheet: {settimana_sheet}")
-    print(f"   📂 Settimana Folder: {settimana_folder}")
-    print(f"   📆 Giorno: {giorno_it} ({fascia})")
-    print(f"   🎥 File cercato: {nome_video_cercato}")
 
-    # 1. CERCA LA CARTELLA (Usa settimana_folder "09")
+    # 1. CERCA LA CARTELLA
     query_folder = f"mimeType = 'application/vnd.google-apps.folder' and name contains '{settimana_folder}' and trashed = false"
-    folders = service.files().list(q=query_folder).execute().get('files', [])
+    folders = service_drive.files().list(q=query_folder).execute().get('files', [])
     if not folders: 
-        print(f"❌ ERRORE: Nessuna cartella trovata per la settimana '{settimana_folder}'.")
+        print(f"❌ ERRORE: Nessuna cartella trovata per '{settimana_folder}'.")
         return
     
-    # 2. CERCA IL VIDEO NELLA CARTELLA
+    # 2. CERCA IL VIDEO
     query_video = f"'{folders[0]['id']}' in parents and name contains '{nome_video_cercato}' and trashed = false"
-    videos = service.files().list(q=query_video).execute().get('files', [])
+    videos = service_drive.files().list(q=query_video).execute().get('files', [])
     if not videos: 
-        print(f"❌ ERRORE: Nessun video trovato con nome contenente '{nome_video_cercato}' nella cartella '{folders[0]['name']}'.")
+        print(f"❌ ERRORE: Nessun video trovato con '{nome_video_cercato}'.")
         return
     
     video = videos[0]
     print(f"✅ Video trovato su Drive: {video['name']}")
 
-    # 3. CERCA IL FOGLIO E ESTRAI DALLA COLONNA F
-    caption_telegram = f"🎬 Ecco il video di {giorno_it} {fascia}!\n\nSia Gloria a Dio!" 
-    print(f"🔍 Accesso al foglio Piano_Editoriale_2026...")
-    
+    # 3. CERCA IL FOGLIO
+    caption_testo = f"🎬 Ecco il video di {giorno_it} {fascia}!\n\nSia Gloria a Dio!" 
     try:
         csv_export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
-        # dtype=str è FONDAMENTALE: legge tutto come testo così "09" e "9" non si confondono
         df = pd.read_csv(csv_export_url, dtype=str) 
-        print("✅ Foglio caricato e letto correttamente!")
-
-        # MAPPATURA COLONNE COLAB v21.13 -> GITHUB
-        # A(0)=Settimana, B(1)=Data, C(2)=Giorno, D(3)=Fase, F(5)=Descrizione
         
-        # Filtriamo le righe
         mask_sett = df.iloc[:, 0].str.strip() == settimana_sheet
         mask_giorno = df.iloc[:, 2].apply(pulisci_testo) == pulisci_testo(giorno_it)
         mask_fase = df.iloc[:, 3].apply(pulisci_testo) == pulisci_testo(fascia)
@@ -101,42 +119,45 @@ def main():
         riga = df[mask_sett & mask_giorno & mask_fase]
         
         if not riga.empty:
-            # Prende il testo dalla colonna F (Indice 5)
             descrizione = str(riga.iloc[0, 5]).strip() 
-
             if descrizione and descrizione.lower() != "nan":
-                caption_telegram = descrizione
-                # Limite Telegram 1024 caratteri
-                if len(caption_telegram) > 1024: 
-                    caption_telegram = caption_telegram[:1000] + "...\n#amen"
-                print("✅ Testo estratto con successo dalla Colonna F!")
-            else:
-                print("⚠️ La colonna F è vuota, uso caption di default.")
-        else:
-            print(f"⚠️ Riga non trovata nel foglio per: Settimana {settimana_sheet}, {giorno_it}, {fascia}.")
-            print("💡 Suggerimento: Verifica che Colab abbia scritto la riga e che la data coincida.")
+                caption_testo = descrizione
     except Exception as e:
         print(f"⚠️ Errore lettura Foglio Google: {e}")
 
-    # 4. SCARICA E INVIA
+    # 4. SCARICA IL VIDEO FISICAMENTE (Necessario per YouTube)
     print("📥 Scaricamento del video in corso...")
-    request = service.files().get_media(fileId=video['id'])
-    fh_video = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh_video, request)
-    while not downloader.next_chunk()[1]: pass
-    fh_video.seek(0)
+    file_path = "video_temp.mp4"
+    request = service_drive.files().get_media(fileId=video['id'])
     
-    print("🚀 Inviando a Telegram...")
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVideo"
-    files = {'video': (video['name'], fh_video, 'video/mp4')}
-    data = {'chat_id': CHAT_ID, 'caption': caption_telegram}
-    
-    r = requests.post(url, files=files, data=data)
-    
-    if r.status_code == 200:
-        print("🌟 SUCCESSO! Video pubblicato su Telegram.")
-    else:
-        print(f"❌ Errore Telegram: {r.text}")
+    with open(file_path, "wb") as f:
+        downloader = MediaIoBaseDownload(f, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+
+    # 5. INVIA A TELEGRAM
+    if TELEGRAM_TOKEN and CHAT_ID:
+        print("🚀 Inviando a Telegram...")
+        # Adattiamo la caption per i limiti di Telegram
+        caption_tg = caption_testo if len(caption_testo) <= 1024 else caption_testo[:1000] + "...\n#amen"
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVideo"
+        with open(file_path, "rb") as video_file:
+            r = requests.post(url, files={'video': video_file}, data={'chat_id': CHAT_ID, 'caption': caption_tg})
+            if r.status_code == 200:
+                print("🌟 SUCCESSO! Video pubblicato su Telegram.")
+            else:
+                print(f"❌ Errore Telegram: {r.text}")
+
+    # 6. CARICA SU YOUTUBE
+    if service_youtube:
+        # Usa il nome del file (senza .mp4) come titolo del video, oppure usa una stringa fissa
+        titolo_youtube = f"Video di {giorno_it} {fascia}"
+        upload_to_youtube(service_youtube, file_path, titolo_youtube, caption_testo)
+
+    # 7. PULIZIA
+    if os.path.exists(file_path):
+        os.remove(file_path)
 
 if __name__ == "__main__":
     main()
