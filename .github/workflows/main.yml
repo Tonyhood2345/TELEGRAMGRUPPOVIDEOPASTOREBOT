@@ -1,4 +1,4 @@
-name: Post Video a Telegram
+name: Post Video a Telegram e YouTube
 
 on:
   schedule:
@@ -16,7 +16,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.11' # 🆙 Aggiornato per rimuovere i warning
 
       - name: Install dependencies
         run: |
@@ -27,4 +27,8 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GDRIVE_JSON }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          # 🔴 ECCO LE CHIAVI DI YOUTUBE CHE MANCAVANO:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
         run: python bot.py
